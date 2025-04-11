@@ -1,0 +1,66 @@
+# Import the Active Directory module
+Import-Module ActiveDirectory
+
+# Path to the CSV file
+$csvPath = "C:\Users\Administrator\Documents\Ansatte\brukere.csv"
+
+# Import users from the CSV
+$users = Import-Csv -Path $csvPath
+
+# Secure the password "Admin:123" as a plain text secure string
+$password = ConvertTo-SecureString "Admin:123" -AsPlainText -Force
+
+foreach ($user in $users) {
+    # Retrieve CSV fields
+    $firstName    = $user.Fnavn
+    $middleName   = $user.Mnavn
+    $lastName     = $user.Enavn
+    $samAccount   = $user.Brukernavn
+    $avdelingRaw  = $user.Avdeling
+
+    # Determine OU and group membership.
+    # If Avdeling contains a '/', split it into two tokens.
+    if ($avdelingRaw -match "/") {
+        $tokens = $avdelingRaw -split "/"
+        $ouName  = $tokens[0].Trim()   # First part used for OU and first group
+        $group1  = $tokens[0].Trim()
+        $group2  = $tokens[1].Trim()   # Second group
+    }
+    else {
+        $ouName  = $avdelingRaw.Trim()
+        $group1  = $avdelingRaw.Trim()
+        $group2  = $null
+    }
+
+    # Build the distinguished name (DN) for the target OU.
+    # The OU structure: OU=<Avdeling>,OU=Ansatte,DC=io,DC=local
+    $ouDN = "OU=$ouName,OU=Ansatte,DC=io,DC=local"
+
+    # Construct the display name (avoid extra spaces if Middle Name is missing)
+    if ([string]::IsNullOrWhiteSpace($middleName)) {
+        $displayName = "$firstName $lastName"
+    }
+    else {
+        $displayName = "$firstName $middleName $lastName"
+    }
+
+    # Create the new AD user in the specified OU
+    New-ADUser `
+        -Name $displayName `
+        -GivenName $firstName `
+        -Surname $lastName `
+        -SamAccountName $samAccount `
+        -UserPrincipalName "$samAccount@io.local" `
+        -Path $ouDN `
+        -AccountPassword $password `
+        -PasswordNeverExpires $true `
+        -Enabled $true
+
+    # Add the user to the first group (matching the OU name)
+    Add-ADGroupMember -Identity $group1 -Members $samAccount
+
+    # If a second group was specified, add the user to that group as well
+    if ($group2) {
+        Add-ADGroupMember -Identity $group2 -Members $samAccount
+    }
+}
